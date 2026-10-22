@@ -4,23 +4,79 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	// "net/http"
+	"sync/atomic"
 )
 
-func main() {
-	fmt.Println("Hello, World!")
-	const port = "8080"
+type apiConfig struct {
+	fileserverHits atomic.Int32
+}
 
-	// fileServer := http.FileServer(http.Dir("./static"))
-	mux := http.NewServeMux()
+func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg.fileserverHits.Add(1)
+		next.ServeHTTP(w, r)
+	})
 
-	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
+}
+
+func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf("Hits: %d", cfg.fileserverHits.Load())))
+}
+
+func helloHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/hello" {
+		http.Error(w, "404 not found", http.StatusNotFound)
+		return
+	}
+	if r.Method != "GET" {
+		http.Error(w, "404 Not Found", http.StatusNotFound)
+		return
+	}
+	fmt.Fprintf(w, "Hello")
+}
+
+func formHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
-	mux.Handle("/", http.FileServer(http.Dir("./static")))
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form", http.StatusBadRequest)
+		return
+	}
 
-	log.Println("Serving on port : %s\n", port)
-	log.Fatal(srv.ListenAndServe())
+	name := r.FormValue("name")
+	address := r.FormValue("Address")
+
+	fmt.Fprintf(w, "Name: %s\nAddress: %s", name, address)
+}
+
+func main() {
+	const port = "8080"
+
+	mux := http.NewServeMux()
+
+	apiCfg := apiConfig{fileserverHits: atomic.Int32{}}
+
+	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir("./static")))))
+
+	// mux.Handle("/app/assets/", http.StripPrefix("/app", http.FileServer(http.Dir("."))))
+
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "OK")
+	})
+
+	mux.HandleFunc("/metrics/", apiCfg.handlerMetrics)
+	mux.HandleFunc("/reset/", apiCfg.handlerReset)
+
+	mux.HandleFunc("/hello", helloHandler)
+	mux.HandleFunc("/form", formHandler)
+
+	log.Printf("Serving on port %s", port)
+	log.Fatal(http.ListenAndServe(":"+port, mux))
 }
