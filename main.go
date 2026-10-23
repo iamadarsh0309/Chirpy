@@ -12,6 +12,7 @@ type apiConfig struct {
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg.fileserverHits.Add(1)
 		next.ServeHTTP(w, r)
@@ -20,6 +21,9 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 }
 
 func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not found", 405)
+	}
 	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("Hits: %d", cfg.fileserverHits.Load())))
@@ -65,14 +69,17 @@ func main() {
 
 	// mux.Handle("/app/assets/", http.StripPrefix("/app", http.FileServer(http.Dir("."))))
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "Method not found", 405)
+		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "OK")
 	})
 
-	mux.HandleFunc("/metrics/", apiCfg.handlerMetrics)
-	mux.HandleFunc("/reset/", apiCfg.handlerReset)
+	mux.HandleFunc("GET /metrics/", apiCfg.handlerMetrics)
+	mux.HandleFunc("POST /reset", apiCfg.handlerReset)
 
 	mux.HandleFunc("/hello", helloHandler)
 	mux.HandleFunc("/form", formHandler)
